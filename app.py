@@ -30,6 +30,7 @@ from contextlib import nullcontext
 import rasterio
 from rasterio.mask import mask
 import geopandas as gpd
+import warnings
 
 # =============================================================================
 # Configuração de Logging
@@ -265,12 +266,12 @@ def carregar_var_bioclim(numero_var):
         raise ValueError(f"Não foi possível carregar a variável BIO{numero_var}")
 
 @st.cache_data(ttl="1d", show_spinner=False)
-def extrair_valores_em_cache(raster, df, numero_var):
+def extrair_valores_em_cache(_raster, df, numero_var):
     """
     Extrai valores de um raster para pontos em um DataFrame.
     
     Args:
-        raster (rasterio.DatasetReader): Dataset raster.
+        _raster (rasterio.DatasetReader): Dataset raster.
         df (pd.DataFrame): DataFrame com colunas 'latitude' e 'longitude'.
         numero_var (int): Número da variável para fins de log.
         
@@ -282,7 +283,7 @@ def extrair_valores_em_cache(raster, df, numero_var):
         coords = [(lon, lat) for lon, lat in zip(df['longitude'], df['latitude'])]
         
         # Extrai os valores para cada ponto
-        values = [x[0] for x in raster.sample(coords)]
+        values = [x[0] for x in _raster.sample(coords)]
         
         # Remove valores None e NaN
         values = [v for v in values if v is not None and not np.isnan(v)]
@@ -1355,13 +1356,28 @@ def pagina_variaveis_ambientais():
     
     # Análise de correlação
     with st.spinner("Calculando matriz de correlação..."):
-        corr_matrix = raw_data_df.corr()
+        # Limpa os dados antes de calcular a correlação
+        raw_data_df_clean = raw_data_df.copy()
+        
+        # Verifica se há colunas com todos os valores NaN
+        all_nan_columns = raw_data_df_clean.columns[raw_data_df_clean.isna().all()].tolist()
+        if all_nan_columns:
+            st.warning(f"As seguintes variáveis contêm apenas valores NaN e foram removidas da análise: {', '.join(all_nan_columns)}")
+            raw_data_df_clean = raw_data_df_clean.drop(columns=all_nan_columns)
+        
+        # Calcula a matriz de correlação apenas com dados válidos
+        corr_matrix = raw_data_df_clean.corr()
         
         st.subheader("Matriz de Correlação Pairwise")
         
         # Exibe o heatmap da matriz de correlação
         fig, ax = plt.subplots(figsize=(12, 10))
-        sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", square=True, fmt=".2f", ax=ax, annot_kws={"size": 8})
+        
+        # Configura o matplotlib para ignorar avisos
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", square=True, fmt=".2f", ax=ax, annot_kws={"size": 8})
+        
         ax.set_title("Matriz de Correlação entre Variáveis Bioclimáticas")
         st.pyplot(fig)
     
