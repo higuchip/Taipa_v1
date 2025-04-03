@@ -370,7 +370,7 @@ folium.Map.add_ee_layer = adicionar_camada_ee
 
 def adicionar_camada_raster(self, raster_path, vis_params, name):
     """
-    Adiciona uma camada raster local a um mapa Folium.
+    Adiciona uma camada raster local a um mapa Folium, recortada para o polígono do Brasil.
     
     Args:
         self: Instância do mapa Folium.
@@ -382,33 +382,61 @@ def adicionar_camada_raster(self, raster_path, vis_params, name):
         with rasterio.open(raster_path) as src:
             # Lê os dados do raster
             data = src.read(1)
+            transform = src.transform
             
+            # Cria uma máscara de validade para o Brasil
+            if poligono_brasil is not None:
+                # Rasteriza o polígono do Brasil na mesma resolução do raster
+                brasil_mask = rasterio.features.geometry_mask(
+                    [poligono_brasil], 
+                    out_shape=data.shape, 
+                    transform=transform, 
+                    invert=True
+                )
+                
+                # Aplica a máscara (usando NaN para áreas fora do Brasil)
+                masked_data = data.copy()
+                masked_data[~brasil_mask] = np.nan
+                data = masked_data
+                
             # Normaliza os dados para o intervalo [0, 1]
             vmin = vis_params.get('min', np.nanmin(data))
             vmax = vis_params.get('max', np.nanmax(data))
-            data_norm = (data - vmin) / (vmax - vmin)
+            data_norm = np.clip((data - vmin) / (vmax - vmin), 0, 1)
+            
+            # Cria uma imagem RGBA para controlar transparência
+            # (as áreas com NaN serão completamente transparentes)
+            cmap = plt.get_cmap(vis_params.get('colormap', 'viridis'))
+            rgba_img = cmap(data_norm)
+            # Define alpha channel (transparência)
+            rgba_img[..., 3] = np.where(np.isnan(data_norm), 0, 0.7)  # 0.7 é a opacidade para pixels válidos
             
             # Cria uma imagem PNG temporária
+            temp_filename = f'temp_{name.replace("/", "_").replace(":", "_")}.png'
             plt.figure(figsize=(10, 10))
-            plt.imshow(data_norm, cmap='viridis')
+            plt.imshow(rgba_img)
             plt.axis('off')
-            plt.savefig(f'temp_{name}.png', bbox_inches='tight', pad_inches=0)
+            plt.savefig(temp_filename, bbox_inches='tight', pad_inches=0, transparent=True)
             plt.close()
+            
+            # Define os limites do raster para usar no mapa
+            bounds = [[src.bounds.bottom, src.bounds.left], 
+                      [src.bounds.top, src.bounds.right]]
             
             # Adiciona a imagem ao mapa
             folium.raster_layers.ImageOverlay(
-                f'temp_{name}.png',
-                bounds=[[src.bounds.bottom, src.bounds.left], 
-                       [src.bounds.top, src.bounds.right]],
+                temp_filename,
+                bounds=bounds,
                 name=name,
-                opacity=0.7
+                opacity=1.0  # Definimos como 1.0 porque já controlamos a transparência na imagem
             ).add_to(self)
             
             # Remove o arquivo temporário
-            os.remove(f'temp_{name}.png')
+            os.remove(temp_filename)
             
     except Exception as e:
         logger.error(f"Erro ao adicionar camada raster ao mapa: {str(e)}")
+        st.warning(f"Erro ao adicionar {name} ao mapa: {str(e)}")
         # Não levantamos exceção aqui para não interromper o carregamento do mapa
 
 # Adiciona o método ao mapa Folium
