@@ -448,7 +448,7 @@ folium.Map.add_raster_layer = adicionar_camada_raster
 # =============================================================================
 
 @tratar_excecao
-def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0.5):
+def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0.5, exclusion_radius=2.0):
     """
     Gera pontos de pseudoausência utilizando algoritmo espacialmente otimizado.
     
@@ -459,12 +459,13 @@ def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0
         presence_df (pd.DataFrame): DataFrame com pontos de presença (precisa ter colunas latitude/longitude).
         n_points (int): Número de pontos de pseudoausência a gerar.
         buffer_distance (float): Distância do buffer em graus.
+        exclusion_radius (float): Raio em graus em torno dos pontos de presença onde não podem ser geradas pseudoausências.
         
     Returns:
         pd.DataFrame: DataFrame com pontos de pseudoausência.
     """
     try:
-        logger.info(f"Gerando {n_points} pseudoausências com buffer de {buffer_distance} graus")
+        logger.info(f"Gerando {n_points} pseudoausências com buffer de {buffer_distance} graus e raio de exclusão de {exclusion_radius} graus")
         
         # Converte pontos de presença para geometrias
         presence_points = [Point(lon, lat) for lon, lat in zip(presence_df["longitude"], presence_df["latitude"])]
@@ -485,6 +486,14 @@ def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0
             
             progress_bar.progress(1.0)
         
+        # Gera zonas de exclusão ao redor dos pontos de presença
+        exclusion_zones = []
+        if exclusion_radius > 0:
+            with st.spinner("Criando zonas de exclusão..."):
+                exclusion_zones = [point.buffer(exclusion_radius) for point in presence_points]
+                combined_exclusion = unary_union(exclusion_zones)
+                st.info(f"Criadas zonas de exclusão com raio de {exclusion_radius} graus (≈ {exclusion_radius * 111:.0f} km)")
+        
         # Une todos os buffers e encontra a interseção com o Brasil
         with st.spinner("Calculando área de amostragem (buffers ∩ Brasil)..."):
             union_buffers = unary_union(buffers)
@@ -499,8 +508,16 @@ def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0
             st.error("A área permitida (buffers ∩ Brasil) está vazia. Tente diminuir o buffer.")
             return pd.DataFrame()
         
+        # Se existirem zonas de exclusão, remova-as da área permitida
+        if exclusion_zones:
+            combined_exclusion = unary_union(exclusion_zones)
+            allowed_region = allowed_region.difference(combined_exclusion)
+            if allowed_region.is_empty:
+                st.error("A área permitida está vazia após aplicar zonas de exclusão. Tente reduzir o raio de exclusão.")
+                return pd.DataFrame()
+        
         # Exibe informações sobre a área permitida
-        st.write("Limites da área permitida (buffers ∩ Brasil):", allowed_region.bounds)
+        st.write("Limites da área permitida (buffers ∩ Brasil - zonas de exclusão):", allowed_region.bounds)
         st.write("Área permitida (valor em graus²):", allowed_region.area)
         
         # Obtém os limites da área permitida
@@ -566,15 +583,24 @@ def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0
                 
                 # Verifica se o ponto está dentro da área permitida
                 if allowed_region.contains(p):
-                    pseudo_points.append({
-                        "species": "pseudo-absence",
-                        "latitude": random_lat,
-                        "longitude": random_lon
-                    })
+                    # Verifica distância mínima para pontos de presença (adicional à zona de exclusão)
+                    is_valid = True
+                    if exclusion_radius > 0:
+                        for presence_point in presence_points:
+                            if p.distance(presence_point) < exclusion_radius:
+                                is_valid = False
+                                break
                     
-                    # Atualiza a barra de progresso
-                    progress = min(1.0, len(pseudo_points) / n_points)
-                    progress_bar.progress(progress)
+                    if is_valid:
+                        pseudo_points.append({
+                            "species": "pseudo-absence",
+                            "latitude": random_lat,
+                            "longitude": random_lon
+                        })
+                        
+                        # Atualiza a barra de progresso
+                        progress = min(1.0, len(pseudo_points) / n_points)
+                        progress_bar.progress(progress)
                 
                 attempts += 1
                 
@@ -588,6 +614,20 @@ def gerar_pseudoausencias_otimizado(presence_df, n_points=100, buffer_distance=0
             st.warning(f"Atingido limite de tentativas. Gerados apenas {len(pseudo_points)}/{n_points} pontos.")
         else:
             st.success(f"Gerados {len(pseudo_points)} pontos de pseudoausência com sucesso.")
+        
+        # Cálculo das distâncias mínimas aos pontos de presença
+        if pseudo_points and exclusion_radius > 0:
+            distances = []
+            for pp in pseudo_points:
+                p = Point(pp["longitude"], pp["latitude"])
+                min_dist = float('inf')
+                for presence_point in presence_points:
+                    d = p.distance(presence_point)
+                    min_dist = min(min_dist, d)
+                distances.append(min_dist)
+            
+            st.info(f"Distância mínima aos pontos de presença: {min(distances) * 111:.1f} km")
+            st.info(f"Distância média aos pontos de presença: {(sum(distances) / len(distances)) * 111:.1f} km")
         
         logger.info(f"Gerados {len(pseudo_points)} pontos de pseudoausência em {attempts} tentativas")
         return pd.DataFrame(pseudo_points)
@@ -1211,7 +1251,7 @@ def pagina_pseudoausencias():
                     "Número de pseudoausências a gerar", 
                     min_value=CONFIG['pseudoausencias']['minimo'], 
                     max_value=CONFIG['pseudoausencias']['maximo'], 
-                    value=CONFIG['pseudoausencias']['padrao'], 
+                    value=CONFIG['pseudoausencias']['num_pontos_padrao'], 
                     step=10
                 )
             
@@ -1219,10 +1259,10 @@ def pagina_pseudoausencias():
                 # Slider para buffer em Km
                 buffer_distance_km = st.slider(
                     "Tamanho do buffer (em Km)", 
-                    min_value=1, 
-                    max_value=200, 
-                    value=CONFIG['pseudoausencias']['buffer_padrao_km'], 
-                    step=1
+                    min_value=200, 
+                    max_value=1000, 
+                    value=max(200, int(CONFIG['pseudoausencias']['distancia_buffer_padrao'] * 111)), 
+                    step=50
                 )
             
             # Converte de Km para graus (1 grau ≈ 111 Km)
@@ -1231,16 +1271,24 @@ def pagina_pseudoausencias():
             submitted = st.form_submit_button("Gerar Pseudoausências")
             
             if submitted:
-                pseudo_df = gerar_pseudoausencias_otimizado(df_presence, n_points, buffer_distance_degrees)
+                # Verifica se exclusion_radius está presente no CONFIG
+                exclusion_radius = CONFIG['pseudoausencias'].get('raio_exclusao_padrao', 2.0)
+                pseudo_df = gerar_pseudoausencias_otimizado(df_presence, n_points, buffer_distance_degrees, exclusion_radius)
                 
-                if not pseudo_df.empty:
+                # Adiciona verificação para evitar erro com NoneType
+                if pseudo_df is None:
+                    st.error("Ocorreu um erro ao gerar pseudoausências. Nenhum dado foi retornado.")
+                elif not pseudo_df.empty:
                     st.session_state.df_pseudo = pseudo_df
                     st.success(f"{len(pseudo_df)} pontos de pseudoausência gerados com sucesso.")
         
         if "df_pseudo" in st.session_state:
             pseudo_df = st.session_state.df_pseudo
             
-            if not pseudo_df.empty:
+            # Adiciona verificação para evitar erro com NoneType
+            if pseudo_df is None:
+                st.error("Dados de pseudoausência inválidos. Tente gerar novamente.")
+            elif not pseudo_df.empty:
                 st.subheader("Visualização das Pseudoausências")
                 
                 # Tabs para diferentes visualizações
@@ -1354,6 +1402,14 @@ def pagina_variaveis_ambientais():
 
     df_occ = st.session_state.df_api
     df_pseudo = st.session_state.df_pseudo
+    
+    # Verifica se os DataFrames são None ou estão vazios
+    if df_occ is None or df_occ.empty:
+        st.error("Dados de presença inválidos ou vazios. Faça nova busca de ocorrências.")
+        return
+    if df_pseudo is None or df_pseudo.empty:
+        st.error("Dados de pseudoausência inválidos ou vazios. Gere pseudoausências novamente.")
+        return
     
     # Usa uma função cacheada para extrair os dados das variáveis bioclimáticas
     with st.spinner("Extraindo valores das variáveis bioclimáticas..."):
