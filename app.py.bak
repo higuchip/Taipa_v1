@@ -36,7 +36,6 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from datetime import datetime
 import pickle
 import re
-from sklearn.model_selection import train_test_split
 
 # =============================================================================
 # Configuração de Logging
@@ -1542,11 +1541,6 @@ def pagina_variaveis_ambientais():
             st.dataframe(final_vif)
             st.success(f"Variáveis selecionadas para modelagem (VIF < {threshold}): {', '.join(variables)}")
             
-            # Armazenar variáveis selecionadas na sessão do Streamlit para uso na modelagem
-            # Ignorando a constante, usamos apenas os números das variáveis BIO
-            selected_vars_nums = [int(var.replace("BIO", "")) for var in variables]
-            st.session_state["selected_variables"] = selected_vars_nums
-            
         except Exception as e:
             st.error(f"Erro ao realizar eliminação stepwise: {str(e)}")
             logger.error(f"Erro em eliminação stepwise: {str(e)}", exc_info=True)
@@ -1659,7 +1653,7 @@ def executar_modelo():
         st.warning("⚠️ Variáveis bioclimáticas não pré-selecionadas. Visite a seção Variáveis Ambientais primeiro.")
         if st.button("Ir para Variáveis Ambientais"):
             st.session_state.page = "variaveis_ambientais"
-            st.rerun()
+            st.experimental_rerun()
         return
     
     df_occ = st.session_state.df_api
@@ -1868,6 +1862,7 @@ def executar_modelo():
                     n_jobs=-1,  # Usar todos os processadores disponíveis
                     min_samples_split=5,  # Exigir pelo menos 5 amostras para dividir um nó
                     min_samples_leaf=2,  # Exigir pelo menos 2 amostras em cada nó folha
+                    max_features='sqrt'  # Limitar o número de atributos considerados em cada divisão
                 )
                 
                 # Treinar o modelo
