@@ -1781,6 +1781,8 @@ def executar_modelo():
             step=0.05,
             help="Fração dos dados reservados para avaliar o modelo"
         )
+        
+       
     
     # Semente aleatória para reprodutibilidade
     random_state = st.number_input(
@@ -1976,13 +1978,68 @@ def executar_modelo():
         
         with st.expander("Como interpretar os resultados?", expanded=True):
             st.write("""
-            Os resultados do modelo apresentam diferentes métricas e visualizações:
+            Os resultados do modelo apresentam diferentes métricas e visualizações que ajudam a entender o desempenho e as características do modelo de distribuição de espécies:
             
-            - **Métricas de desempenho**: Acurácia, precisão, recall, F1-score e AUC 
-            - **Matriz de confusão**: Mostra verdadeiros positivos, verdadeiros negativos, falsos positivos e falsos negativos
-            - **Curva ROC**: Avalia o desempenho do modelo em diferentes limiares de classificação
-            - **Importância das variáveis**: Indica quais variáveis contribuem mais para o modelo
-            - **Curvas de resposta**: Mostram como cada variável afeta a probabilidade de ocorrência da espécie
+            ### Métricas de Desempenho
+            
+            - **Acurácia**: Proporção de previsões corretas (presença e ausência) em relação ao total de observações. 
+              - *Varia de 0 a 1 (ou 0% a 100%)*
+              - *Exemplo*: Uma acurácia de 0.85 significa que 85% das classificações estão corretas.
+              - *Limitação*: Pode ser enganosa se os dados tiverem classes desbalanceadas.
+            
+            - **Precisão**: Proporção de previsões positivas (presença) corretas em relação a todas as previsões positivas.
+              - *Responde à pergunta*: "Das áreas onde o modelo previu presença da espécie, qual porcentagem realmente tem a espécie presente?"
+              - *Importante quando*: Queremos evitar falsos positivos (prever presença onde não há).
+            
+            - **Recall (Sensibilidade)**: Proporção de presenças reais que foram corretamente identificadas pelo modelo.
+              - *Responde à pergunta*: "Das áreas onde a espécie realmente está presente, qual porcentagem foi detectada pelo modelo?"
+              - *Importante quando*: Queremos evitar falsos negativos (não identificar a espécie onde ela está presente).
+            
+            - **F1-Score**: Média harmônica entre precisão e recall, oferecendo um equilíbrio entre essas duas métricas.
+              - *Útil quando*: Precisamos de um equilíbrio entre identificar corretamente presenças e evitar falsos positivos.
+            
+            - **AUC (Área Sob a Curva ROC)**: Mede a capacidade do modelo de distinguir entre presenças e ausências em diferentes limiares.
+              - *Varia de 0.5 (modelo aleatório) a 1.0 (modelo perfeito)*
+              - *Interpretação*: 
+                 - 0.5-0.6: Discriminação ruim
+                 - 0.6-0.7: Discriminação fraca
+                 - 0.7-0.8: Discriminação aceitável
+                 - 0.8-0.9: Discriminação boa
+                 - >0.9: Discriminação excelente
+            
+            ### Visualizações
+            
+            - **Matriz de Confusão**: Tabela que mostra:
+              - **Verdadeiro Positivo (VP)**: Canto inferior direito - Presença corretamente prevista como presença
+              - **Verdadeiro Negativo (VN)**: Canto superior esquerdo - Ausência corretamente prevista como ausência
+              - **Falso Positivo (FP)**: Canto superior direito - Ausência incorretamente prevista como presença
+              - **Falso Negativo (FN)**: Canto inferior esquerdo - Presença incorretamente prevista como ausência
+              - *Interpretação*: Um bom modelo tem valores mais altos na diagonal principal (VP e VN)
+            
+            - **Curva ROC**: Gráfico que mostra o desempenho do modelo em todos os limiares de classificação.
+              - **Eixo X**: Taxa de Falsos Positivos (1 - Especificidade): Proporção de ausências incorretamente classificadas como presenças
+              - **Eixo Y**: Taxa de Verdadeiros Positivos (Sensibilidade/Recall): Proporção de presenças corretamente identificadas
+              - *Interpretação*: 
+                 - Linha diagonal (AUC = 0.5): Desempenho de um modelo aleatório
+                 - Quanto mais próxima a curva estiver do canto superior esquerdo, melhor o modelo
+                 - Comparar curvas de treino e teste: Se a curva de treino for muito superior à de teste, pode indicar overfitting
+            
+            - **Treino vs. Teste**: Compara o desempenho do modelo nos dados de treino e teste.
+              - *Interpretação*: 
+                 - Métricas similares: O modelo generaliza bem
+                 - Métricas muito melhores no treino: Possível overfitting (o modelo "decorou" os dados de treino)
+                 - Diferença grande entre AUC de treino e teste: Indica problemas de generalização
+            
+            - **Importância das Variáveis**: Mostra quais variáveis bioclimáticas mais influenciam o modelo.
+              - *Interpretação biológica*: Variáveis com maior importância representam fatores climáticos mais determinantes para a distribuição da espécie
+              - *Utilidade prática*: Ajuda a entender quais fatores ambientais limitam a distribuição da espécie
+            
+            - **Curvas de Resposta**: Mostram como a probabilidade de ocorrência varia conforme os valores de cada variável.
+              - *Interpretação ecológica*: Revelam a faixa de condições ambientais preferidas pela espécie
+              - *Área sombreada*: Indica a frequência dos valores da variável nos dados (densidade)
+              - *Tipos de resposta*: Lineares, unimodais (formato de sino), limiares, etc.
+            
+            **Importante:** O modelo atual usa uma divisão única entre dados de treino e teste. Isso pode resultar em estimativas otimistas ou pessimistas do desempenho dependendo da divisão específica. A validação cruzada (não implementada) forneceria uma estimativa mais robusta.
             """)
         
         # Métricas de desempenho
