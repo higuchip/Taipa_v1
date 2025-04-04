@@ -36,7 +36,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from datetime import datetime
 import pickle
 import re
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 
 # =============================================================================
 # Configuração de Logging
@@ -85,7 +85,6 @@ def configurar_logging():
 
 # Inicializa o logger
 logger = configurar_logging()
-
 
 # =============================================================================
 # Carregamento de Configuração
@@ -194,7 +193,6 @@ CONFIG = carregar_configuracao()
 vis_params_dict = CONFIG['vis_params']
 bio_descriptions_pt = CONFIG['descricoes_bio']
 
-
 # =============================================================================
 # Função decoradora para tratamento de exceções
 # =============================================================================
@@ -218,7 +216,6 @@ def tratar_excecao(func):
             st.error(f"Ocorreu um erro: {str(e)}")
             return None
     return wrapper
-
 
 # =============================================================================
 # Funções Auxiliares (Utilitários)
@@ -448,7 +445,6 @@ def adicionar_camada_raster(self, raster_path, vis_params, name):
 
 # Adiciona o método ao mapa Folium
 folium.Map.add_raster_layer = adicionar_camada_raster
-
 
 # =============================================================================
 # Funções de Geração de Pseudoausências e Busca de Ocorrências
@@ -764,7 +760,6 @@ def buscar_ocorrencias_gbif(especie, limite=100):
         logger.error(f"Erro ao buscar ocorrências: {str(e)}", exc_info=True)
         return pd.DataFrame()
 
-
 # =============================================================================
 # Funções de Visualização e Extração de Dados
 # =============================================================================
@@ -983,7 +978,6 @@ def amostrar_valor_bio(raster, lat, lon, band_name):
     except Exception as e:
         logger.error(f"Erro ao amostrar valor: {str(e)}")
         return None
-
 
 # =============================================================================
 # Páginas da Aplicação (Interface com o Usuário)
@@ -1374,7 +1368,6 @@ def pagina_pseudoausencias():
         
         # Link para a página de busca
         st.markdown("[Ir para a página de busca](#Busca-Ocorrência)")
-
 
 def pagina_variaveis_ambientais():
     """
@@ -1859,110 +1852,252 @@ def executar_modelo():
                 y = np.hstack([y_presence, y_absence])
                 coords = np.vstack([coords_presence, coords_absence])
                 
-                # 5. Divisão em conjuntos de treino e teste (estratificada)
-                X_train, X_test, y_train, y_test, coords_train, coords_test = train_test_split(
-                    X, y, coords, test_size=test_size, random_state=random_state, stratify=y
-                )
+                # 5. Implementar validação cruzada estratificada (5-fold)
+                n_folds = 5
+                cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
                 
-                st.info(f"Dados divididos em {len(X_train)} registros para treino e {len(X_test)} para teste.")
+                # Inicializar listas para armazenar resultados de cada fold
+                accuracies = []
+                precisions = []
+                recalls = []
+                f1_scores = []
+                aucs = []
+                train_accuracies = []
+                train_precisions = []
+                train_recalls = []
+                train_f1_scores = []
+                train_aucs = []
+                all_confusion_matrices = []
+                all_fprs = []
+                all_tprs = []
+                all_train_fprs = []
+                all_train_tprs = []
                 
-                # 6. Treinar o modelo Random Forest
-                model = RandomForestClassifier(
+                # Armazenar informações do último fold para uso nas curvas de resposta
+                last_fold_data = None
+                
+                # Barra de progresso para os folds
+                progress_bar = st.progress(0)
+                fold_status = st.empty()
+                
+                # Para cada fold na validação cruzada
+                for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X, y)):
+                    fold_status.info(f"Treinando e avaliando fold {fold_idx+1}/{n_folds}...")
+                    
+                    try:
+                        # Dividir dados para este fold
+                        X_train, X_test = X[train_idx], X[test_idx]
+                        y_train, y_test = y[train_idx], y[test_idx]
+                        coords_train, coords_test = coords[train_idx], coords[test_idx]
+                        
+                        # Verificar se há dados suficientes de cada classe para treino
+                        if np.sum(y_train == 0) < 2 or np.sum(y_train == 1) < 2:
+                            fold_status.warning(f"Fold {fold_idx+1}: Dados insuficientes para treino. Pulando...")
+                            continue
+                            
+                        # Verificar se há dados suficientes de cada classe para teste
+                        if np.sum(y_test == 0) < 2 or np.sum(y_test == 1) < 2:
+                            fold_status.warning(f"Fold {fold_idx+1}: Dados insuficientes para teste. Pulando...")
+                            continue
+                        
+                        # Treinar o modelo para este fold
+                        model = RandomForestClassifier(
+                            n_estimators=n_estimators,
+                            max_depth=max_depth,
+                            max_features=max_features,
+                            random_state=random_state,
+                            n_jobs=-1,
+                            min_samples_split=5,
+                            min_samples_leaf=2
+                        )
+                        
+                        model.fit(X_train, y_train)
+                        
+                        # Avaliação no conjunto de treino
+                        y_train_pred = model.predict(X_train)
+                        y_train_proba = model.predict_proba(X_train)[:, 1]
+                        
+                        # Métricas de treino
+                        train_accuracies.append(accuracy_score(y_train, y_train_pred))
+                        train_precisions.append(precision_score(y_train, y_train_pred))
+                        train_recalls.append(recall_score(y_train, y_train_pred))
+                        train_f1_scores.append(f1_score(y_train, y_train_pred))
+                        
+                        # Curva ROC para treino
+                        train_fpr, train_tpr, _ = roc_curve(y_train, y_train_proba)
+                        train_aucs.append(auc(train_fpr, train_tpr))
+                        all_train_fprs.append(train_fpr)
+                        all_train_tprs.append(train_tpr)
+                        
+                        # Avaliação no conjunto de teste
+                        y_pred = model.predict(X_test)
+                        y_pred_proba = model.predict_proba(X_test)[:, 1]
+                        
+                        # Métricas de teste
+                        accuracies.append(accuracy_score(y_test, y_pred))
+                        precisions.append(precision_score(y_test, y_pred))
+                        recalls.append(recall_score(y_test, y_pred))
+                        f1_scores.append(f1_score(y_test, y_pred))
+                        
+                        # Curva ROC para teste
+                        fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
+                        aucs.append(auc(fpr, tpr))
+                        all_fprs.append(fpr)
+                        all_tprs.append(tpr)
+                        
+                        # Matriz de confusão
+                        cm = confusion_matrix(y_test, y_pred)
+                        all_confusion_matrices.append(cm)
+                        
+                        # Armazenar dados do último fold para curvas de resposta
+                        if fold_idx == n_folds - 1 or fold_idx == len(list(cv.split(X, y))) - 1:
+                            last_fold_data = {
+                                "model": model,
+                                "X_test": X_test,
+                                "y_test": y_test,
+                                "y_pred": y_pred,
+                                "y_pred_proba": y_pred_proba,
+                                "coords_test": coords_test
+                            }
+                        
+                    except Exception as e:
+                        fold_status.warning(f"Erro no fold {fold_idx+1}: {str(e)}. Pulando...")
+                        logger.error(f"Erro no fold {fold_idx+1} da validação cruzada: {str(e)}", exc_info=True)
+                        continue
+                        
+                    # Atualizar barra de progresso
+                    progress_bar.progress((fold_idx + 1) / n_folds)
+                
+                # Verificar se pelo menos um fold foi concluído com sucesso
+                if len(accuracies) == 0:
+                    raise ValueError("Nenhum fold foi concluído com sucesso. Verifique seus dados.")
+                
+                # Treinar um modelo final com todos os dados
+                final_model = RandomForestClassifier(
                     n_estimators=n_estimators,
                     max_depth=max_depth,
                     max_features=max_features,
                     random_state=random_state,
-                    n_jobs=-1,  # Usar todos os processadores disponíveis
-                    min_samples_split=5,  # Exigir pelo menos 5 amostras para dividir um nó
-                    min_samples_leaf=2,  # Exigir pelo menos 2 amostras em cada nó folha
+                    n_jobs=-1,
+                    min_samples_split=5,
+                    min_samples_leaf=2
                 )
+                final_model.fit(X, y)
                 
-                # Treinar o modelo
-                model.fit(X_train, y_train)
+                # Número real de folds concluídos
+                folds_completed = len(accuracies)
                 
-                # 7. Avaliação no conjunto de treino
-                y_train_pred = model.predict(X_train)
-                y_train_proba = model.predict_proba(X_train)[:, 1]
+                # Atualizações para a geração de curvas de resposta
+                if last_fold_data is None:
+                    # Se nenhum fold foi armazenado para curvas de resposta, usar o último fold com sucesso
+                    last_fold_idx = len(accuracies) - 1
+                    try:
+                        fold_idx = last_fold_idx  # Índice do último fold bem-sucedido
+                        train_idx, test_idx = list(cv.split(X, y))[fold_idx]
+                        X_test = X[test_idx]
+                        y_test = y[test_idx]
+                        coords_test = coords[test_idx]
+                        y_pred = final_model.predict(X_test)
+                        y_pred_proba = final_model.predict_proba(X_test)[:, 1]
+                        last_fold_data = {
+                            "model": final_model,
+                            "X_test": X_test,
+                            "y_test": y_test,
+                            "y_pred": y_pred,
+                            "y_pred_proba": y_pred_proba,
+                            "coords_test": coords_test
+                        }
+                    except Exception as e:
+                        st.error(f"Erro ao gerar dados para curvas de resposta: {str(e)}")
+                        logger.error(f"Erro ao gerar dados para curvas de resposta: {str(e)}", exc_info=True)
                 
-                # Métricas de treino
-                train_accuracy = accuracy_score(y_train, y_train_pred)
-                train_precision = precision_score(y_train, y_train_pred)
-                train_recall = recall_score(y_train, y_train_pred)
-                train_f1 = f1_score(y_train, y_train_pred)
-                
-                # Curva ROC para treino
-                train_fpr, train_tpr, _ = roc_curve(y_train, y_train_proba)
-                train_auc = auc(train_fpr, train_tpr)
-                
-                # 8. Avaliação no conjunto de teste
-                y_pred = model.predict(X_test)
-                y_pred_proba = model.predict_proba(X_test)[:, 1]
-                
-                # Métricas de teste
-                accuracy = accuracy_score(y_test, y_pred)
-                precision = precision_score(y_test, y_pred)
-                recall = recall_score(y_test, y_pred)
-                f1 = f1_score(y_test, y_pred)
-                
-                # Curva ROC para teste
-                fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
-                auc_value = auc(fpr, tpr)
-                
-                # Matriz de confusão
-                cm = confusion_matrix(y_test, y_pred)
-                
-                # 9. Importância das variáveis
+                # 9. Importância das variáveis do modelo final
                 feature_names = [f"BIO{num}" for num in selected_vars_nums]
                 feature_importance = pd.DataFrame({
                     'Feature': feature_names,
-                    'Importance': model.feature_importances_
+                    'Importance': final_model.feature_importances_
                 }).sort_values('Importance', ascending=False)
+                
+                # Calcular médias e desvios padrão das métricas
+                metrics = {
+                    "accuracy": {"mean": np.mean(accuracies), "std": np.std(accuracies)},
+                    "precision": {"mean": np.mean(precisions), "std": np.std(precisions)},
+                    "recall": {"mean": np.mean(recalls), "std": np.std(recalls)},
+                    "f1": {"mean": np.mean(f1_scores), "std": np.std(f1_scores)},
+                    "auc": {"mean": np.mean(aucs), "std": np.std(aucs)},
+                    "train_accuracy": {"mean": np.mean(train_accuracies), "std": np.std(train_accuracies)},
+                    "train_precision": {"mean": np.mean(train_precisions), "std": np.std(train_precisions)},
+                    "train_recall": {"mean": np.mean(train_recalls), "std": np.std(train_recalls)},
+                    "train_f1": {"mean": np.mean(train_f1_scores), "std": np.std(train_f1_scores)},
+                    "train_auc": {"mean": np.mean(train_aucs), "std": np.std(train_aucs)},
+                    "all_folds": {
+                        "accuracies": accuracies,
+                        "precisions": precisions,
+                        "recalls": recalls,
+                        "f1_scores": f1_scores,
+                        "aucs": aucs,
+                        "train_accuracies": train_accuracies,
+                        "train_precisions": train_precisions,
+                        "train_recalls": train_recalls,
+                        "train_f1_scores": train_f1_scores,
+                        "train_aucs": train_aucs
+                    }
+                }
+                
+                # Matriz de confusão média (só calcular se houver pelo menos um fold)
+                if len(all_confusion_matrices) > 0:
+                    cm_mean = np.mean(all_confusion_matrices, axis=0).astype(int)
+                else:
+                    cm_mean = np.zeros((2, 2), dtype=int)  # Matriz vazia como fallback
                 
                 # 10. Armazenar resultados
                 results = {
-                    "model": model,
-                    "X_train": X_train,
-                    "y_train": y_train,
-                    "X_test": X_test,
-                    "y_test": y_test,
-                    "y_pred": y_pred,
-                    "y_pred_proba": y_pred_proba,
-                    "metrics": {
-                        "accuracy": accuracy,
-                        "precision": precision,
-                        "recall": recall,
-                        "f1": f1,
-                        "auc": auc_value,
-                        "train_accuracy": train_accuracy,
-                        "train_precision": train_precision,
-                        "train_recall": train_recall,
-                        "train_f1": train_f1,
-                        "train_auc": train_auc
-                    },
-                    "roc": {
-                        "fpr": fpr,
-                        "tpr": tpr,
-                        "thresholds": thresholds,
-                        "train_fpr": train_fpr,
-                        "train_tpr": train_tpr
-                    },
-                    "confusion_matrix": cm,
+                    "model": final_model,
+                    "X": X,
+                    "y": y,
+                    "metrics": metrics,
+                    "confusion_matrix": cm_mean,
                     "feature_importance": feature_importance,
                     "selected_variables": feature_names,
-                    "coords_test": coords_test,
+                    "roc": {
+                        "all_fprs": all_fprs,
+                        "all_tprs": all_tprs,
+                        "all_train_fprs": all_train_fprs,
+                        "all_train_tprs": all_train_tprs
+                    },
                     "params": {
                         "n_estimators": n_estimators,
                         "max_depth": max_depth,
                         "max_features": max_features,
-                        "test_size": test_size,
+                        "k_folds": n_folds,
+                        "folds_completed": folds_completed,
                         "random_state": random_state
                     }
                 }
                 
+                # Incluir dados do último fold para curvas de resposta
+                if last_fold_data:
+                    results.update({
+                        "X_test": last_fold_data["X_test"],
+                        "y_test": last_fold_data["y_test"],
+                        "y_pred": last_fold_data["y_pred"],
+                        "y_pred_proba": last_fold_data["y_pred_proba"],
+                        "coords_test": last_fold_data["coords_test"]
+                    })
+                
                 # Armazenar resultados na sessão
                 st.session_state["model_results"] = results
                 
-                st.success("✅ Modelo treinado com sucesso!")
+                if folds_completed < n_folds:
+                    fold_status.warning(f"✅ Validação cruzada concluída com {folds_completed}/{n_folds} folds. Alguns folds foram pulados devido a erros.")
+                else:
+                    fold_status.success(f"✅ Validação cruzada de {n_folds}-fold concluída com sucesso!")
+                
+                # Adicionar informação sobre curvas de resposta
+                st.info("""
+                ℹ️ Para gerar curvas de resposta, estamos usando dados do último fold. 
+                As curvas mostram como cada variável ambiental afeta a probabilidade de ocorrência da espécie.
+                """)
                 
             except Exception as e:
                 st.error(f"❌ Erro ao treinar o modelo: {str(e)}")
@@ -2039,22 +2174,56 @@ def executar_modelo():
               - *Área sombreada*: Indica a frequência dos valores da variável nos dados (densidade)
               - *Tipos de resposta*: Lineares, unimodais (formato de sino), limiares, etc.
             
-            **Importante:** O modelo atual usa uma divisão única entre dados de treino e teste. Isso pode resultar em estimativas otimistas ou pessimistas do desempenho dependendo da divisão específica. A validação cruzada (não implementada) forneceria uma estimativa mais robusta.
+            **Importante:** O modelo utiliza validação cruzada 5-fold para avaliar o desempenho. Isso significa que: (1) Os dados são divididos em 5 partes iguais, (2) O modelo é treinado 5 vezes, usando 4 partes para treino e 1 para teste cada vez, (3) Os resultados apresentados são a média e o desvio padrão das métricas nas 5 divisões, (4) Esta abordagem produz uma estimativa mais robusta do desempenho do modelo em dados novos, (5) O modelo final é treinado com todos os dados disponíveis para maximizar o aprendizado.
             """)
         
         # Métricas de desempenho
         st.subheader("Métricas de Desempenho")
+
+        # Criar tabela de métricas sem setas
+        metrics_df = pd.DataFrame({
+            "Métrica": ["Acurácia", "Precisão", "Recall", "AUC"],
+            "Valor (média ± desvio padrão)": [
+                f"{metrics["accuracy"]["mean"]:.3f} ± {metrics["accuracy"]["std"]:.3f}",
+                f"{metrics["precision"]["mean"]:.3f} ± {metrics["precision"]["std"]:.3f}",
+                f"{metrics["recall"]["mean"]:.3f} ± {metrics["recall"]["std"]:.3f}",
+                f"{metrics["auc"]["mean"]:.3f} ± {metrics["auc"]["std"]:.3f}"
+            ]
+        })
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Acurácia", f"{metrics['accuracy']:.3f}")
-        with col2:
-            st.metric("Precisão", f"{metrics['precision']:.3f}")
-        with col3:
-            st.metric("Recall", f"{metrics['recall']:.3f}")
-        with col4:
-            st.metric("AUC", f"{metrics['auc']:.3f}")
+        # Exibir a tabela de métricas
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+
+            
+        with st.expander("Detalhes da Validação Cruzada"):
+            st.write(f"""
+            **Validação Cruzada**: {results['params']['folds_completed']}/{results['params']['k_folds']} folds concluídos com sucesso
+            
+            **Estatísticas detalhadas (média ± desvio padrão):**
+            - **Treino**:
+              - Acurácia: {metrics['train_accuracy']['mean']:.3f} ± {metrics['train_accuracy']['std']:.3f}
+              - AUC: {metrics['train_auc']['mean']:.3f} ± {metrics['train_auc']['std']:.3f}
+              - F1-Score: {metrics['train_f1']['mean']:.3f} ± {metrics['train_f1']['std']:.3f}
+            
+            - **Teste**:
+              - Acurácia: {metrics['accuracy']['mean']:.3f} ± {metrics['accuracy']['std']:.3f}
+              - AUC: {metrics['auc']['mean']:.3f} ± {metrics['auc']['std']:.3f}
+              - F1-Score: {metrics['f1']['mean']:.3f} ± {metrics['f1']['std']:.3f}
+            """)
+            
+            # Visualizar métricas em todos os folds
+            all_folds = metrics['all_folds']
+            fold_data = pd.DataFrame({
+                'Fold': list(range(1, len(all_folds['accuracies'])+1)),
+                'Acurácia (Teste)': all_folds['accuracies'],
+                'AUC (Teste)': all_folds['aucs'],
+                'F1 (Teste)': all_folds['f1_scores'],
+                'Acurácia (Treino)': all_folds['train_accuracies'],
+                'AUC (Treino)': all_folds['train_aucs'],
+                'F1 (Treino)': all_folds['train_f1_scores']
+            })
+            
+            st.dataframe(fold_data.style.format("{:.3f}", subset=fold_data.columns[1:]))
         
         # Visualizações em duas colunas
         col1, col2 = st.columns(2)
@@ -2076,12 +2245,12 @@ def executar_modelo():
         with col2:
             # Curva ROC
             st.write("### Curva ROC")
-            fpr, tpr = results["roc"]["fpr"], results["roc"]["tpr"]
-            train_fpr, train_tpr = results["roc"]["train_fpr"], results["roc"]["train_tpr"]
+            fpr, tpr = results["roc"]["all_fprs"][-1], results["roc"]["all_tprs"][-1]
+            train_fpr, train_tpr = results["roc"]["all_train_fprs"][-1], results["roc"]["all_train_tprs"][-1]
             
             fig, ax = plt.subplots(figsize=(6, 5))
-            ax.plot(fpr, tpr, 'b-', label=f'Teste (AUC = {metrics["auc"]:.3f})')
-            ax.plot(train_fpr, train_tpr, 'r--', label=f'Treino (AUC = {metrics["train_auc"]:.3f})')
+            ax.plot(fpr, tpr, 'b-', label=f'Teste (AUC = {metrics["auc"]["mean"]:.3f})')
+            ax.plot(train_fpr, train_tpr, 'r--', label=f'Treino (AUC = {metrics["train_auc"]["mean"]:.3f})')
             ax.plot([0, 1], [0, 1], 'k--', label='Aleatório (AUC = 0.5)')
             ax.set_xlabel('Taxa de Falsos Positivos')
             ax.set_ylabel('Taxa de Verdadeiros Positivos')
@@ -2098,12 +2267,12 @@ def executar_modelo():
                 'Conjunto': ['Treino', 'Teste', 'Treino', 'Teste', 'Treino', 'Teste'],
                 'Métrica': ['AUC', 'AUC', 'Acurácia', 'Acurácia', 'F1-Score', 'F1-Score'],
                 'Valor': [
-                    metrics['train_auc'], 
-                    metrics['auc'],
-                    metrics['train_accuracy'],
-                    metrics['accuracy'],
-                    metrics['train_f1'],
-                    metrics['f1']
+                    metrics['train_auc']['mean'], 
+                    metrics['auc']['mean'],
+                    metrics['train_accuracy']['mean'],
+                    metrics['accuracy']['mean'],
+                    metrics['train_f1']['mean'],
+                    metrics['f1']['mean']
                 ]
             }
             
@@ -2755,7 +2924,6 @@ def projecao_futura():
                 ax.set_title("Comparação da Distribuição de Adequabilidade")
                 ax.legend()
                 st.pyplot(fig)
-
 
 # =============================================================================
 # Menu de Navegação (Sidebar) e Execução do App
