@@ -1631,7 +1631,11 @@ def executar_modelo():
     Página para execução do modelo de aprendizado de máquina usando Random Forest.
     Utiliza dados de presença e pseudo-ausência para treinar o modelo com variáveis bioclimáticas.
     """
-    st.title("Modelagem de Nicho Ecológico")
+    st.title("Modelagem da Distribuição Espacial")
+    
+    # Exibir o nome da espécie que está sendo modelada
+    if "especie" in st.session_state:
+        st.write(f"**Espécie sendo modelada: *{st.session_state.especie}***")
     
     # ETAPA 1: Verificação de dados
     st.subheader("1️⃣ Dados Disponíveis")
