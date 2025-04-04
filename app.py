@@ -2301,53 +2301,49 @@ def executar_modelo():
             logger.error(f"Erro na visualização: {str(e)}", exc_info=True)
         
         # Salvar o modelo
-        with st.expander("Salvar Modelo"):
+        with st.expander("Download do Modelo"):
             nome_modelo = st.text_input("Nome do Modelo", 
                                       value=f"RF_Model_{st.session_state.get('especie', 'especie').replace(' ', '_')}")
             
-            if st.button("Salvar Modelo"):
+            if st.button("Download do Modelo"):
                 try:
-                    # Criar diretório para modelos, se não existir
-                    os.makedirs("modelos", exist_ok=True)
+                    # Preparar o modelo para download
+                    model_bytes = pickle.dumps(results["model"])
                     
-                    # Salvar o modelo treinado
-                    model_path = f"modelos/{nome_modelo}.pkl"
-                    with open(model_path, 'wb') as f:
-                        pickle.dump(results["model"], f)
+                    # Preparar metadados
+                    metadata = {
+                        "metrics": results["metrics"],
+                        "selected_variables": results["selected_variables"],
+                        "params": results["params"],
+                        "feature_importance": [
+                            {"feature": row["Feature"], "importance": float(row["Importance"])}
+                            for _, row in results["feature_importance"].iterrows()
+                        ],
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "species": st.session_state.get("especie", "unknown_species")
+                    }
                     
-                    # Salvar metadados
-                    metadata_path = f"modelos/{nome_modelo}_metadata.json"
-                    with open(metadata_path, 'w') as f:
-                        # Converte arrays numpy para listas antes de salvar como JSON
-                        metadata = {
-                            "metrics": results["metrics"],
-                            "selected_variables": results["selected_variables"],
-                            "params": results["params"],
-                            "feature_importance": [
-                                {"feature": row["Feature"], "importance": float(row["Importance"])}
-                                for _, row in results["feature_importance"].iterrows()
-                            ],
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "species": st.session_state.get("especie", "unknown_species")
-                        }
-                        json.dump(metadata, f, indent=4)
-                    
-                    st.success(f"Modelo e metadados salvos em:\n- {model_path}\n- {metadata_path}")
-                    
-                    # Opção para download do modelo
-                    with open(model_path, 'rb') as f:
-                        model_bytes = f.read()
-                        
+                    # Botão para download do modelo
                     st.download_button(
-                        "Download do Modelo",
+                        "Download do Modelo (.pkl)",
                         model_bytes,
                         file_name=f"{nome_modelo}.pkl",
                         mime="application/octet-stream"
                     )
                     
+                    # Botão para download dos metadados
+                    st.download_button(
+                        "Download dos Metadados (.json)",
+                        json.dumps(metadata, indent=4),
+                        file_name=f"{nome_modelo}_metadata.json",
+                        mime="application/json"
+                    )
+                    
+                    st.success(f"Clique nos botões acima para baixar o modelo e seus metadados.")
+                    
                 except Exception as e:
-                    st.error(f"Erro ao salvar modelo: {str(e)}")
-                    logger.error(f"Erro ao salvar: {str(e)}", exc_info=True)
+                    st.error(f"Erro ao preparar modelo para download: {str(e)}")
+                    logger.error(f"Erro no download: {str(e)}", exc_info=True)
 
 def resultados():
     """
