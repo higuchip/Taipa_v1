@@ -999,7 +999,7 @@ def pagina_inicial():
     **Bem-vindo à TAIPA!**
 
     A TAIPA é uma plataforma interativa para o ensino de Modelagem de Distribuição de Espécies (SDM)
-    utilizando o algoritmo MaxEnt. Aqui, você pode explorar dados de ocorrência, gerar pseudoausências,
+    utilizando o algoritmo Random Forest. Aqui, você pode explorar dados de ocorrência, gerar pseudoausências,
     visualizar variáveis ambientais e executar modelos simulados.
     """)
     
@@ -1019,7 +1019,7 @@ def pagina_inicial():
         1. Buscar ocorrências de uma espécie via API
         2. Gerar pontos de pseudoausência
         3. Analisar variáveis ambientais
-        4. Executar o modelo MaxEnt
+        4. Executar o modelo Random Forest
         5. Visualizar resultados e projeções
         """)
     
@@ -1028,7 +1028,7 @@ def pagina_inicial():
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("[Documentação GBIF](https://www.gbif.org/developer/summary)")
-        st.markdown("[MaxEnt](https://biodiversityinformatics.amnh.org/open_source/maxent/)")
+        st.markdown("[Random Forest](https://scikit-learn.org/stable/modules/ensemble.html#random-forest)")
     with col2:
         st.markdown("[WorldClim](https://www.worldclim.org/data/bioclim.html)")
         st.markdown("[GeoPandas](https://geopandas.org/)")
@@ -1733,6 +1733,7 @@ def executar_modelo():
         - **n_estimators**: Número de árvores (mais árvores = mais robusto, mas mais lento)
         - **max_depth**: Profundidade máxima das árvores (limitar = reduzir overfitting)
         - **test_size**: Proporção dos dados usados para teste (para validar o modelo)
+        - **max_features**: Número máximo de features por árvore (limitar = reduzir overfitting)
         """)
     
     # Formulário para configurar os hiperparâmetros
