@@ -2313,11 +2313,14 @@ def executar_modelo():
         # Renomear colunas para exibição
         feature_importance_display = feature_importance.copy()
         feature_importance_display['Feature_Display'] = feature_importance_display.apply(
-            lambda row: f"{row['Feature']}: {row['Descrição'][:30]}{'...' if len(row['Descrição']) > 30 else ''}", 
+            lambda row: f"{row['Feature']}: {row['Descrição']}", 
             axis=1
         )
         
-        fig, ax = plt.subplots(figsize=(10, 5))
+        # Calcular altura da figura baseada no número de variáveis
+        altura_fig = max(5, len(feature_importance_display) * 0.7)
+        fig, ax = plt.subplots(figsize=(12, altura_fig))
+        plt.subplots_adjust(left=0.35)  # Ajustar margem esquerda para acomodar nomes longos
         sns.barplot(x='Importance', y='Feature_Display', data=feature_importance_display, ax=ax)
         ax.set_xlabel('Importância Relativa')
         ax.set_ylabel('Variável')
@@ -2357,7 +2360,7 @@ def executar_modelo():
                 n_rows = (num_vars + n_cols - 1) // n_cols
                 
                 # Criar um grid de subplots
-                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 5 * n_rows))
                 
                 # Verificar se axes é um array ou um único eixo
                 if num_vars == 1:
@@ -2429,7 +2432,7 @@ def executar_modelo():
                                     # Truncar título longo
                                     if len(title) > 40:
                                         title = title[:37] + "..."
-                                    ax.set_title(title, fontsize=9)
+                                    ax.set_title(title, fontsize=8, wrap=True)
                                 else:
                                     ax.set_title(feature_name)
                             except ValueError:
