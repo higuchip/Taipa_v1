@@ -336,42 +336,6 @@ def converter_shapely_para_geojson(shapely_geom):
         raise ValueError("Geometria Shapely não pode ser None")
     return shapely_geom.__geo_interface__
 
-        
-    geojson = shapely_geom.__geo_interface__
-    
-    if geojson['type'] == 'Polygon':
-        return ee.Geometry.Polygon(geojson['coordinates'])
-    elif geojson['type'] == 'MultiPolygon':
-        return ee.Geometry.MultiPolygon(geojson['coordinates'])
-    else:
-        raise ValueError(f"Tipo de geometria não suportado: {geojson['type']}")
-
-def adicionar_camada_ee(self, ee_image_object, vis_params, name):
-    """
-    Adiciona uma camada Earth Engine a um mapa Folium.
-    
-    Args:
-        self: Instância do mapa Folium.
-        ee_image_object (ee.Image): Imagem Earth Engine.
-        vis_params (dict): Parâmetros de visualização.
-        name (str): Nome da camada.
-    """
-    try:
-        map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-        folium.raster_layers.TileLayer(
-            tiles=map_id_dict['tile_fetcher'].url_format,
-            attr='Map Data &copy; Google Earth Engine',
-            name=name,
-            overlay=True,
-            control=True
-        ).add_to(self)
-    except Exception as e:
-        logger.error(f"Erro ao adicionar camada EE ao mapa: {str(e)}")
-        # Não levantamos exceção aqui para não interromper o carregamento do mapa
-
-# Adiciona o método ao mapa Folium
-folium.Map.add_ee_layer = adicionar_camada_ee
-
 def adicionar_camada_raster(self, raster_path, vis_params, name):
     """
     Adiciona uma camada raster local a um mapa Folium, recortada para o polígono do Brasil.
