@@ -1289,6 +1289,15 @@ def pagina_pseudoausencias():
                     max_lat = df_combined["latitude"].max()
                     min_lon = df_combined["longitude"].min()
                     max_lon = df_combined["longitude"].max()
+                    
+                    # Reduzir a margem para focar mais nos pontos (2% em vez de 10%)
+                    lat_margin = (max_lat - min_lat) * 0.02
+                    lon_margin = (max_lon - min_lon) * 0.02
+                    min_lat -= lat_margin
+                    max_lat += lat_margin
+                    min_lon -= lon_margin
+                    max_lon += lon_margin
+                    
                     center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
                     
                     m = folium.Map(location=center)
@@ -1299,7 +1308,7 @@ def pagina_pseudoausencias():
                     for _, row in df_presence.iterrows():
                         folium.CircleMarker(
                             location=[row["latitude"], row["longitude"]],
-                            radius=3,
+                            radius=5,  # Aumentado para melhor visualização
                             color="blue",
                             fill=True,
                             fill_color="blue",
@@ -1313,7 +1322,7 @@ def pagina_pseudoausencias():
                     for _, row in pseudo_df.iterrows():
                         folium.CircleMarker(
                             location=[row["latitude"], row["longitude"]],
-                            radius=3,
+                            radius=5,  # Aumentado para melhor visualização
                             color="red",
                             fill=True,
                             fill_color="red",
