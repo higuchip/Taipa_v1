@@ -9,7 +9,7 @@ import requests
 import folium
 import geobr
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
 from streamlit_folium import st_folium
 from folium.plugins import Draw, HeatMap
@@ -354,11 +354,11 @@ def adicionar_camada_raster(self, raster_path, vis_params, name):
             # Cria uma imagem RGBA para controlar transparência
             # (as áreas com NaN serão completamente transparentes)
             # Utiliza palette definida em vis_params, se disponível, senão usa colormap padrão
-            if 'palette' in vis_params:
-                cmap = ListedColormap(vis_params['palette'])
+            if 'palette' in vis_params and vis_params['palette']:
+                mpl_cmap = LinearSegmentedColormap.from_list(name, vis_params['palette'], N=256)
             else:
-                cmap = plt.get_cmap(vis_params.get('colormap', 'viridis'))
-            rgba_img = cmap(data_norm)
+                mpl_cmap = plt.get_cmap(vis_params.get('colormap', 'viridis'))
+            rgba_img = mpl_cmap(data_norm)
             # Define alpha channel (transparência)
             rgba_img[..., 3] = np.where(np.isnan(data_norm), 0, 0.7)  # 0.7 é a opacidade para pixels válidos
             
@@ -379,8 +379,16 @@ def adicionar_camada_raster(self, raster_path, vis_params, name):
                 temp_filename,
                 bounds=bounds,
                 name=name,
-                opacity=1.0  # Definimos como 1.0 porque já controlamos a transparência na imagem
+                opacity=1.0  # Transparência já aplicada na imagem
             ).add_to(self)
+            # Adiciona legenda de cores usando LinearColormap do branca
+            try:
+                from branca.colormap import LinearColormap
+                if 'palette' in vis_params and vis_params['palette']:
+                    legend = LinearColormap(vis_params['palette'], vmin=vmin, vmax=vmax, caption=name)
+                    legend.add_to(self)
+            except Exception as e:
+                logger.error(f"Erro ao adicionar legenda para {name}: {str(e)}")
             
             # Remove o arquivo temporário
             os.remove(temp_filename)
