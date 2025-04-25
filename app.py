@@ -10,6 +10,7 @@ import folium
 import geobr
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+from io import BytesIO
 import seaborn as sns
 from streamlit_folium import st_folium
 from folium.plugins import Draw, HeatMap
@@ -2051,6 +2052,47 @@ def executar_modelo():
                 
                 # Armazenar resultados na sessão
                 st.session_state["model_results"] = results
+                # Geração do Mapa de Distribuição Potencial
+                with st.spinner("Gerando Mapa de Distribuição Potencial..."):
+                    try:
+                        selected_variables = results.get("selected_variables", [])
+                        if selected_variables:
+                            # Carregar rasters das variáveis selecionadas
+                            nums = [int(var.replace("BIO", "")) for var in selected_variables]
+                            rasters = [carregar_var_bioclim(num) for num in nums]
+                            src0 = rasters[0]
+                            data0 = src0.read(1)
+                            height, width = data0.shape
+                            transform = src0.transform
+                            # Criar máscara do Brasil
+                            mask_brazil = rasterio.features.geometry_mask(
+                                [poligono_brasil],
+                                out_shape=data0.shape,
+                                transform=transform,
+                                invert=True
+                            )
+                            # Ler e mascarar arrays
+                            arrays = []
+                            for src in rasters:
+                                arr = src.read(1)
+                                arr[~mask_brazil] = np.nan
+                                arrays.append(arr)
+                            # Empilhar e preparar dados para predição
+                            stack = np.stack(arrays, axis=0)
+                            stack_flat = stack.reshape(len(arrays), -1).T
+                            valid_idx = ~np.isnan(stack_flat).any(axis=1)
+                            map_flat = np.full(stack_flat.shape[0], np.nan)
+                            if valid_idx.any():
+                                X_pred = stack_flat[valid_idx]
+                                preds = results["model"].predict_proba(X_pred)[:, 1]
+                                map_flat[valid_idx] = preds
+                            map_array = map_flat.reshape(height, width)
+                            results["map"] = map_array
+                        else:
+                            results["map"] = np.array([])
+                    except Exception as e:
+                        logger.error(f"Erro ao gerar mapa de distribuição potencial: {e}", exc_info=True)
+                        st.warning(f"Não foi possível gerar o mapa de distribuição: {str(e)}")
                 
                 if folds_completed < n_folds:
                     fold_status.warning(f"✅ Validação cruzada concluída com {folds_completed}/{n_folds} folds. Alguns folds foram pulados devido a erros.")
@@ -2548,12 +2590,15 @@ def resultados():
     """
     st.title("Resultados do Modelo")
     st.warning("AVISO: Esta seção está em desenvolvimento. Os resultados são simulados.")
+    # Exibir espécie em análise
+    if "especie" in st.session_state:
+        st.write(f"**Espécie analisada: *{st.session_state.especie}***")
     
     if "model_results" in st.session_state:
         results = st.session_state["model_results"]
         
         # Tabs para diferentes visualizações
-        tabs = st.tabs(["Mapa de Probabilidade", "Estatísticas", "Avaliação", "Download"])
+        tabs = st.tabs(["Mapa de Probabilidade", "Avaliação", "Download"])
         
         with tabs[0]:
             st.subheader("Mapa de Distribuição Potencial")
@@ -2564,68 +2609,124 @@ def resultados():
                 0.0, 1.0, 0.5, 0.01,
                 help="Valor de corte para presença/ausência"
             )
+            # Orientações pedagógicas sobre seleção de threshold
+            with st.expander("Sobre o Limiar de Corte (threshold)", expanded=False):
+                st.write(
+                    "O limiar de corte define o valor mínimo de probabilidade previsto para classificar uma célula como 'presente'."
+                    " A escolha do limiar depende do objetivo do estudo e da tolerância a falsos positivos/negativos."
+                )
+                # Cálculo do threshold ótimo via Índice de Youden (método mais comum na literatura)
+                try:
+                    y_test = results.get("y_test")
+                    y_pred_proba = results.get("y_pred_proba")
+                    if y_test is not None and y_pred_proba is not None:
+                        fpr_th, tpr_th, threshs = roc_curve(y_test, y_pred_proba)
+                        J = tpr_th - fpr_th
+                        ix = np.argmax(J)
+                        th_opt = threshs[ix]
+                        st.write(f"**Threshold ótimo (Youden's J):** {th_opt:.3f} (método: Índice de Youden)")
+                except Exception as e:
+                    st.warning(f"Não foi possível calcular threshold ótimo: {e}")
             
             col1, col2 = st.columns(2)
+            # Determinar extensão geográfica para plotagem
+            try:
+                sel_vars = results.get("selected_variables", [])
+                if sel_vars:
+                    num0 = int(sel_vars[0].replace("BIO", ""))
+                    src0 = carregar_var_bioclim(num0)
+                    b = src0.bounds
+                    extent = [b.left, b.right, b.bottom, b.top]
+                else:
+                    extent = None
+            except Exception:
+                extent = None
             
             with col1:
                 # Mapa de probabilidade contínua
                 fig1, ax1 = plt.subplots(figsize=(8, 6))
-                cax = ax1.imshow(results["map"], cmap="viridis", interpolation='nearest')
+                if extent:
+                    cax = ax1.imshow(results["map"], cmap="viridis", interpolation='nearest',
+                                     extent=extent, origin='upper')
+                else:
+                    cax = ax1.imshow(results["map"], cmap="viridis", interpolation='nearest')
                 ax1.set_title("Probabilidade de Ocorrência")
                 fig1.colorbar(cax, label="Probabilidade")
+                # Overlay do polígono do Brasil
+                if poligono_brasil is not None and extent:
+                    geom = poligono_brasil
+                    if hasattr(geom, "geoms"):
+                        for part in geom.geoms:
+                            xs, ys = part.exterior.xy
+                            ax1.plot(xs, ys, color="black", linewidth=1)
+                    else:
+                        xs, ys = geom.exterior.xy
+                        ax1.plot(xs, ys, color="black", linewidth=1)
                 st.pyplot(fig1)
             
             with col2:
                 # Mapa binário (acima/abaixo do threshold)
                 binary_map = results["map"] >= threshold
                 fig2, ax2 = plt.subplots(figsize=(8, 6))
-                cax2 = ax2.imshow(binary_map, cmap="Greens", interpolation='nearest')
+                if extent:
+                    cax2 = ax2.imshow(binary_map, cmap="Greens", interpolation='nearest',
+                                      extent=extent, origin='upper')
+                else:
+                    cax2 = ax2.imshow(binary_map, cmap="Greens", interpolation='nearest')
                 ax2.set_title(f"Presença/Ausência (Limiar: {threshold:.2f})")
+                # Overlay do polígono do Brasil
+                if poligono_brasil is not None and extent:
+                    geom = poligono_brasil
+                    if hasattr(geom, "geoms"):
+                        for part in geom.geoms:
+                            xs, ys = part.exterior.xy
+                            ax2.plot(xs, ys, color="black", linewidth=1)
+                    else:
+                        xs, ys = geom.exterior.xy
+                        ax2.plot(xs, ys, color="black", linewidth=1)
                 st.pyplot(fig2)
             
             # Estatísticas da previsão
-            proporção_prevista = np.mean(binary_map)
-            st.write(f"**Proporção da área prevista como adequada:** {proporção_prevista:.2%}")
+            proporcao_prevista = np.mean(binary_map)
+            st.write(f"**Proporção da área prevista como adequada:** {proporcao_prevista:.2%}")
+            # Explicação pedagógica
+            with st.expander("Sobre a Proporção de Área Adequada", expanded=False):
+                st.markdown(
+                    """
+                    A **Proporção da área prevista como adequada** indica a fração de pixels (ou células) no mapa que, com base no limiar escolhido, foram classificadas como habitat potencialmente favorável para a espécie.
+                    
+                    - Calcula-se como: **(número de células com probabilidade ≥ threshold) / (número total de células)**.
+                    - Uma proporção mais alta sugere maior extensão de habitat potencial, mas pode incluir áreas onde a espécie não ocorre (falsos positivos).
+                    - Uma proporção mais baixa é mais conservadora, reduzindo falsos positivos, mas pode excluir áreas adequadas (falsos negativos).
+                    - Em análises pedagógicas, discuta o trade-off entre sensibilidade e especificidade ao ajustar o limiar e interprete a proporção em conjunto com outras métricas (p.ex., ROC/AUC).
+                    """
+                )
+        
         
         with tabs[1]:
-            st.subheader("Estatísticas do Modelo")
-            
-            # Distribuição de valores de predição (histograma)
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.histplot(results["map"].flatten(), bins=20, kde=True, ax=ax)
-            ax.set_xlabel("Probabilidade Prevista")
-            ax.set_ylabel("Frequência")
-            ax.set_title("Distribuição de Valores de Predição")
-            st.pyplot(fig)
-            
-            # Estatísticas descritivas
-            st.write("**Estatísticas dos Valores Previstos:**")
-            pred_values = results["map"].flatten()
-            stats = {
-                "Mínimo": np.min(pred_values),
-                "1º Quartil": np.percentile(pred_values, 25),
-                "Mediana": np.median(pred_values),
-                "Média": np.mean(pred_values),
-                "3º Quartil": np.percentile(pred_values, 75),
-                "Máximo": np.max(pred_values),
-                "Desvio Padrão": np.std(pred_values)
-            }
-            
-            st.dataframe(pd.DataFrame([stats]).T.rename(columns={0: "Valor"}))
-        
-        with tabs[2]:
             st.subheader("Avaliação do Modelo")
             
             # ROC Curve (simulada)
             st.write("### Curva ROC")
             
             fpr = np.linspace(0, 1, 100)
-            tpr_train = fpr ** (1 / (results["auc_train"] * 5))  # Simulação de curva ROC
-            tpr_test = fpr ** (1 / (results["auc_test"] * 5))
+            # Obter AUC de treino e teste a partir de metrics
+            metrics = results.get("metrics", {})
+            train_auc = metrics.get("train_auc", {}).get("mean", None)
+            test_auc = metrics.get("auc", {}).get("mean", None)
+            # Simulação da curva ROC
+            if train_auc and train_auc > 0:
+                tpr_train = fpr ** (1 / (train_auc * 5))
+            else:
+                tpr_train = fpr
+            if test_auc and test_auc > 0:
+                tpr_test = fpr ** (1 / (test_auc * 5))
+            else:
+                tpr_test = fpr
             
             fig, ax = plt.subplots(figsize=(8, 6))
-            ax.plot(fpr, tpr_train, 'b-', label=f'Treino (AUC = {results["auc_train"]:.3f})')
-            ax.plot(fpr, tpr_test, 'r-', label=f'Teste (AUC = {results["auc_test"]:.3f})')
+            ax.plot(fpr, tpr_train, 'b-', label=(f'Treino (AUC = {train_auc:.3f})' if train_auc is not None else 'Treino (AUC = N/A)'))
+            ax.plot(fpr, tpr_test,  'r-', label=(f'Teste (AUC = {test_auc:.3f})'  if test_auc is not None  else 'Teste (AUC = N/A)'))
             ax.plot([0, 1], [0, 1], 'k--', label='Aleatório (AUC = 0.5)')
             ax.set_xlabel('Taxa de Falsos Positivos')
             ax.set_ylabel('Taxa de Verdadeiros Positivos')
@@ -2634,54 +2735,115 @@ def resultados():
             ax.grid(True, linestyle='--', alpha=0.7)
             st.pyplot(fig)
             
-            # Tabela de importância de variáveis (simulada)
+            # Importância de Variáveis
             st.write("### Importância de Variáveis")
-            
-            # Cria dados simulados de importância
-            var_names = ["BIO1", "BIO12", "BIO15", "BIO4", "BIO7"]
-            importance = np.random.rand(len(var_names))
-            importance = importance / importance.sum() * 100  # Normaliza para percentual
-            
-            var_import_df = pd.DataFrame({
-                'Variável': var_names,
-                'Importância (%)': importance,
-                'Contribuição': importance,
-                'Permutação': importance * (0.8 + 0.4 * np.random.rand(len(var_names)))
-            })
-            
-            var_import_df = var_import_df.sort_values('Importância (%)', ascending=False)
-            var_import_df['Importância (%)'] = var_import_df['Importância (%)'].round(2)
-            var_import_df['Contribuição'] = var_import_df['Contribuição'].round(2)
-            var_import_df['Permutação'] = var_import_df['Permutação'].round(2)
-            
-            st.dataframe(var_import_df)
-            
-            # Gráfico de barras de importância
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.barplot(x='Importância (%)', y='Variável', data=var_import_df, ax=ax)
-            ax.set_title('Importância das Variáveis')
-            ax.set_xlabel('Importância (%)')
-            st.pyplot(fig)
+            feature_importance = results.get("feature_importance")
+            if feature_importance is not None and not feature_importance.empty:
+                df_imp = feature_importance.rename(columns={"Feature": "Variável", "Importance": "Importância"})
+                df_imp["Importância"] = df_imp["Importância"].round(4)
+                st.dataframe(df_imp)
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(x="Importância", y="Variável", data=df_imp, ax=ax)
+                ax.set_title("Importância das Variáveis")
+                ax.set_xlabel("Importância Relativa")
+                st.pyplot(fig)
+            else:
+                st.warning("Importância de variáveis não disponível.")
         
-        with tabs[3]:
-            st.subheader("Download de Resultados")
-            
-            st.write("**Em uma implementação completa, seriam disponibilizadas opções para download de:**")
-            
-            st.write("- Arquivo do modelo (formato .asc)")
-            st.write("- Relatório em PDF com detalhes da modelagem")
-            st.write("- Mapas em formato GeoTIFF")
-            st.write("- Tabelas de resultados em CSV")
-            
-            # Botões de download simulados
+        with tabs[2]:
+            st.subheader("Download de Figuras")
+            # Gerar e baixar as figuras de resultados
             col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Download do Mapa (simulado)"):
-                    st.success("Download iniciado (simulação)")
+            # Mapa de Probabilidade
+            fig_prob, ax_prob = plt.subplots(figsize=(8, 6))
+            if extent:
+                cax = ax_prob.imshow(results["map"], cmap="viridis", interpolation='nearest', extent=extent, origin='upper')
+            else:
+                cax = ax_prob.imshow(results["map"], cmap="viridis", interpolation='nearest')
+            ax_prob.set_title("Probabilidade de Ocorrência")
+            fig_prob.colorbar(cax, label="Probabilidade")
+            if poligono_brasil is not None and extent:
+                geom = poligono_brasil
+                if hasattr(geom, "geoms"):
+                    for part in geom.geoms:
+                        xs, ys = part.exterior.xy
+                        ax_prob.plot(xs, ys, color="black", linewidth=1)
+                else:
+                    xs, ys = geom.exterior.xy
+                    ax_prob.plot(xs, ys, color="black", linewidth=1)
+            buf_prob = BytesIO()
+            fig_prob.savefig(buf_prob, format="png", bbox_inches='tight')
+            buf_prob.seek(0)
+            col1.download_button("Download Mapa de Probabilidade", buf_prob, file_name="mapa_probabilidade.png", mime="image/png")
+            plt.close(fig_prob)
+
+            # Mapa de Presença/Ausência
+            fig_bin, ax_bin = plt.subplots(figsize=(8, 6))
+            binary_map = results["map"] >= threshold
+            if extent:
+                cax2 = ax_bin.imshow(binary_map, cmap="Greens", interpolation='nearest', extent=extent, origin='upper')
+            else:
+                cax2 = ax_bin.imshow(binary_map, cmap="Greens", interpolation='nearest')
+            ax_bin.set_title(f"Presença/Ausência (Limiar: {threshold:.2f})")
+            if poligono_brasil is not None and extent:
+                geom = poligono_brasil
+                if hasattr(geom, "geoms"):
+                    for part in geom.geoms:
+                        xs, ys = part.exterior.xy
+                        ax_bin.plot(xs, ys, color="black", linewidth=1)
+                else:
+                    xs, ys = geom.exterior.xy
+                    ax_bin.plot(xs, ys, color="black", linewidth=1)
+            buf_bin = BytesIO()
+            fig_bin.savefig(buf_bin, format="png", bbox_inches='tight')
+            buf_bin.seek(0)
+            col2.download_button("Download Mapa de Presença/Ausência", buf_bin, file_name="mapa_binario.png", mime="image/png")
+            plt.close(fig_bin)
+            # Curva ROC e Importância de Variáveis para download
+            col3, col4 = st.columns(2)
+            # Curva ROC
+            fpr = np.linspace(0, 1, 100)
+            metrics = results.get("metrics", {})
+            train_auc = metrics.get("train_auc", {}).get("mean", None)
+            test_auc = metrics.get("auc", {}).get("mean", None)
+            if train_auc and train_auc > 0:
+                tpr_train = fpr ** (1 / (train_auc * 5))
+            else:
+                tpr_train = fpr
+            if test_auc and test_auc > 0:
+                tpr_test = fpr ** (1 / (test_auc * 5))
+            else:
+                tpr_test = fpr
+            fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+            ax_roc.plot(fpr, tpr_train, 'b-', label=(f'Treino (AUC={train_auc:.3f})' if train_auc is not None else 'Treino (AUC=N/A)'))
+            ax_roc.plot(fpr, tpr_test,  'r-', label=(f'Teste (AUC={test_auc:.3f})'  if test_auc is not None  else 'Teste (AUC=N/A)'))
+            ax_roc.plot([0, 1], [0, 1], 'k--', label='Aleatório (AUC=0.5)')
+            ax_roc.set_xlabel("Taxa de Falsos Positivos")
+            ax_roc.set_ylabel("Taxa de Verdadeiros Positivos")
+            ax_roc.set_title("Curva ROC")
+            ax_roc.legend()
+            ax_roc.grid(True, linestyle='--', alpha=0.7)
+            buf_roc = BytesIO()
+            fig_roc.savefig(buf_roc, format="png", bbox_inches='tight')
+            buf_roc.seek(0)
+            col3.download_button("Download Curva ROC", buf_roc, file_name="curva_roc.png", mime="image/png")
+            plt.close(fig_roc)
+            # Importância de Variáveis
+            feature_importance = results.get("feature_importance")
+            if feature_importance is not None and not feature_importance.empty:
+                fig_imp, ax_imp = plt.subplots(figsize=(10, 6))
+                sns.barplot(x="Importance", y="Feature", data=feature_importance, ax=ax_imp)
+                ax_imp.set_title("Importância das Variáveis")
+                ax_imp.set_xlabel("Importância Relativa")
+                ax_imp.set_ylabel("Variável")
+                buf_imp = BytesIO()
+                fig_imp.savefig(buf_imp, format="png", bbox_inches='tight')
+                buf_imp.seek(0)
+                col4.download_button("Download Importância de Variáveis", buf_imp, file_name="importancia_variaveis.png", mime="image/png")
+                plt.close(fig_imp)
+            else:
+                col4.warning("Importância de variáveis não disponível.")
             
-            with col2:
-                if st.button("Download do Relatório (simulado)"):
-                    st.success("Relatório gerado (simulação)")
     else:
         st.warning("Nenhum resultado encontrado. Execute o modelo na seção 'Executar Modelo'.")
         
