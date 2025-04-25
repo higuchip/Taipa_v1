@@ -9,6 +9,7 @@ import requests
 import folium
 import geobr
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import seaborn as sns
 from streamlit_folium import st_folium
 from folium.plugins import Draw, HeatMap
@@ -181,10 +182,10 @@ def carregar_configuracao():
         return config
     
     except Exception as e:
-        logger.error(f"Erro ao carregar configuração: {str(e)}")
+        logger.error(f"Erro ao carregar configuração: {str(e)}", exc_info=True)
         st.error(f"Erro ao carregar configuração: {str(e)}")
-        # Retorna configuração padrão mínima em caso de erro
-        return {'vis_params': vis_params_dict, 'descricoes_bio': bio_descriptions_pt}
+        # Abort execution since configuration could not be loaded
+        raise
 
 # Carrega as configurações
 CONFIG = carregar_configuracao()
@@ -300,28 +301,6 @@ def extrair_valores_em_cache(_raster, df, numero_var):
         return []
 
 @tratar_excecao
-def amostrar_valor_bio(raster, lat, lon, band_name):
-    """
-    Amostra um valor de um raster em um ponto específico.
-    
-    Args:
-        raster (rasterio.DatasetReader): Dataset raster.
-        lat (float): Latitude do ponto.
-        lon (float): Longitude do ponto.
-        band_name (str): Nome da banda no raster.
-        
-    Returns:
-        float: Valor amostrado na posição especificada.
-    """
-    try:
-        pt = Point(lon, lat)
-        value = list(raster.sample([(lon, lat)]))[0][0]
-        return value
-    except Exception as e:
-        logger.error(f"Erro ao amostrar valor: {str(e)}")
-        return None
-
-@tratar_excecao
 def converter_shapely_para_geojson(shapely_geom):
     """
     Converte uma geometria Shapely para formato GeoJSON.
@@ -374,7 +353,11 @@ def adicionar_camada_raster(self, raster_path, vis_params, name):
             
             # Cria uma imagem RGBA para controlar transparência
             # (as áreas com NaN serão completamente transparentes)
-            cmap = plt.get_cmap(vis_params.get('colormap', 'viridis'))
+            # Utiliza palette definida em vis_params, se disponível, senão usa colormap padrão
+            if 'palette' in vis_params:
+                cmap = ListedColormap(vis_params['palette'])
+            else:
+                cmap = plt.get_cmap(vis_params.get('colormap', 'viridis'))
             rgba_img = cmap(data_norm)
             # Define alpha channel (transparência)
             rgba_img[..., 3] = np.where(np.isnan(data_norm), 0, 0.7)  # 0.7 é a opacidade para pixels válidos
