@@ -2589,7 +2589,6 @@ def resultados():
     Página para visualização de resultados.
     """
     st.title("Resultados do Modelo")
-    st.warning("AVISO: Esta seção está em desenvolvimento. Os resultados são simulados.")
     # Exibir espécie em análise
     if "especie" in st.session_state:
         st.write(f"**Espécie analisada: *{st.session_state.especie}***")
@@ -2698,7 +2697,7 @@ def resultados():
                     - Calcula-se como: **(número de células com probabilidade ≥ threshold) / (número total de células)**.
                     - Uma proporção mais alta sugere maior extensão de habitat potencial, mas pode incluir áreas onde a espécie não ocorre (falsos positivos).
                     - Uma proporção mais baixa é mais conservadora, reduzindo falsos positivos, mas pode excluir áreas adequadas (falsos negativos).
-                    - Em análises pedagógicas, discuta o trade-off entre sensibilidade e especificidade ao ajustar o limiar e interprete a proporção em conjunto com outras métricas (p.ex., ROC/AUC).
+                    
                     """
                 )
         
